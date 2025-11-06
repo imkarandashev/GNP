@@ -84,12 +84,12 @@ class GNPNPZ():
                     if scheduler is not None:
                         scheduler.step()
 
-                # Bookkeeping (cont.)
-                if progress_bar:
-                    pbar.set_description(f'Train loss {loss:.1e}')
-                    pbar.update()
-                if epoch == epochs - 1:
-                    break
+            # Bookkeeping (cont.)
+            if progress_bar:
+                pbar.set_description(f'Train loss {loss:.1e}')
+                pbar.update()
+            if epoch == epochs - 1:
+                break
 
         # Bookkeeping (cont.)
         if checkpoint_file is not None:
