@@ -1,21 +1,126 @@
 import torch
 import torch.nn.functional as F
-from torch.utils.data import IterableDataset
+from torch.utils.data import IterableDataset, Dataset
 from torch.utils.data.dataloader import DataLoader
 import os
 import numpy as np
 from tqdm import tqdm
 
 from GNP.solver import Arnoldi
+from GNP.utils import load_npzsparse, scale_A_by_spectral_radius
 
+class NPZDataset(Dataset):
+    def __init__(self, path_to_matrix, has_solution):
+        super().__init__()
+        self.datalist = list(map(int, map(lambda x: x.strip(".npz").strip("b_").strip("c_").strip("f_").strip("r_").strip("s_"), os.listdir(path_to_matrix))))
+        self.has_solution = has_solution
+        self.path_to_matrix = path_to_matrix
     
+    def __len__(self):
+        return len(self.datalist)
+
+    def __getitem__(self, idx):
+        A, b, x = load_npzsparse(self.path_to_matrix, self.datalist[idx], "cpu", self.has_solution)
+        # Normalize A to avoid hassles
+        A, gamma = scale_A_by_spectral_radius(A)
+        b = b / gamma
+        return A, b, x
+
+#-----------------------------------------------------------------------------
+# Graph neural preconditioner with npz dataset
+class GNPNPZ():
+
+    # A is torch tensor, either sparse or full
+    def __init__(self, path_to_matrix, has_solution, net, device):
+        self.net = net
+        self.device = device
+        self.dtype = net.dtype
+        self.path_to_matrix = path_to_matrix
+        self.has_solution = has_solution
+        
+    def train(self, batch_size, grad_accu_steps, epochs, optimizer,
+              scheduler=None, num_workers=0, checkpoint_prefix_with_path=None,
+              progress_bar=True):
+
+        self.net.train()
+        optimizer.zero_grad()
+
+        self.dataset = NPZDataset(self.path_to_matrix, self.has_solution)
+        #loader = DataLoader(self.dataset, batch_size, num_workers=num_workers, pin_memory=True, shuffle=True)
+        
+        hist_loss = []
+        best_loss = np.inf
+        best_epoch = -1
+        checkpoint_file = None
+        
+        if progress_bar:
+            pbar = tqdm(total=epochs, desc='Train')
+
+        for epoch in range(epochs):
+            for i in torch.randperm(len(self.dataset)):
+                A, b, x = self.dataset[i]
+                A = A.to(self.dtype).to(self.device)
+                b = b.to(self.dtype).to(self.device)
+                # Train
+                x_out = self.net(A, b)
+                #b_out = (A @ x_out.to(torch.float64)).to(self.dtype)
+                b_out = (A @ x_out)
+                loss = F.l1_loss(b_out.squeeze(), b)
+
+                # Bookkeeping
+                hist_loss.append(loss.item())
+                if loss.item() < best_loss:
+                    best_loss = loss.item()
+                    best_epoch = epoch
+                    if checkpoint_prefix_with_path is not None:
+                        checkpoint_file = checkpoint_prefix_with_path + 'best.pt'
+                        torch.save(self.net.state_dict(), checkpoint_file)
+
+                # Train (cont.)
+                loss.backward()
+                if (epoch+1) % grad_accu_steps == 0 or epoch == epochs - 1:
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    if scheduler is not None:
+                        scheduler.step()
+
+                # Bookkeeping (cont.)
+                if progress_bar:
+                    pbar.set_description(f'Train loss {loss:.1e}')
+                    pbar.update()
+                if epoch == epochs - 1:
+                    break
+
+        # Bookkeeping (cont.)
+        if checkpoint_file is not None:
+            checkpoint_file_old = checkpoint_file
+            checkpoint_file = \
+                checkpoint_prefix_with_path + f'epoch_{best_epoch}.pt'
+            if os.path.exists(checkpoint_file):
+                os.remove(checkpoint_file)
+            os.rename(checkpoint_file_old, checkpoint_file)
+            
+        return hist_loss, best_loss, best_epoch, checkpoint_file
+
+    @torch.no_grad()
+    def apply(self, A, r): # r: float64
+        self.net.eval()
+        A = A.to(self.dtype) # -> lower precision
+        r = r.to(self.dtype) # -> lower precision
+        r = r.view(-1, 1)
+        z = self.net(A, r)
+        z = z.view(-1)
+        z = z.double() # -> float64
+        return z
+
+
+
 #-----------------------------------------------------------------------------
 # The following class implements a streaming dataset, which, in
 # combined use with the dataloader, produces x of size (n,
 # batch_size). x is float64 and stays in cpu. It will be moved to the
 # device and cast to a lower precision for training.
 class StreamingDataset(IterableDataset):
-
     # A is torch tensor, either sparse or full
     def __init__(self, A, batch_size, training_data, m):
         super().__init__()
@@ -76,7 +181,7 @@ class StreamingDataset(IterableDataset):
 class GNP():
 
     # A is torch tensor, either sparse or full
-    def __init__(self, A, training_data, m, net, device):
+    def __init__(self, A, training_data, m, net, device, ):
         self.A = A
         self.training_data = training_data
         self.m = m
@@ -91,7 +196,7 @@ class GNP():
         self.net.train()
         optimizer.zero_grad()
         dataset = StreamingDataset(self.A, batch_size,
-                                   self.training_data, self.m)
+                                       self.training_data, self.m)
         loader = DataLoader(dataset, num_workers=num_workers, pin_memory=True)
         
         hist_loss = []

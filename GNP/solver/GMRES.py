@@ -64,7 +64,7 @@ class GMRES():
             g[0] = beta
             for j in range(restart):
                 if M is not None:
-                    Z[:,j] = M.apply(V[:,j])
+                    Z[:,j] = M.apply(A, V[:,j])
                 else:
                     Z[:,j] = V[:,j]
                 w = A @ Z[:,j]
