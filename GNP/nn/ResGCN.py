@@ -94,8 +94,8 @@ class ResGCN(nn.Module):
         # defining the problem; hence, it is redundant. We keep the
         # code here to leave open the possibility of normalizing A in
         # another manner.
-        self.AA = scale_A_by_spectral_radius(A).to(dtype)
-
+        #self.AA = scale_A_by_spectral_radius(A).to(dtype)
+        self.AA = A.to(dtype)
         self.mlp_initial = MLP(1, embed, 4, hidden, drop_rate)
         self.mlp_final = MLP(embed, 1, 4, hidden, drop_rate,
                              is_output_layer=True)
