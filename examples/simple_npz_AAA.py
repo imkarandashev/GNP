@@ -33,7 +33,7 @@ import sys
 sys.path.append(r"C:\Users\Iakov\jupyter\RUDN\Rosneft2025\GNP")
 
 from GNP.problems import *
-from GNP.solver import GMRES
+from GNP.solver import GMRES_AAA
 from GNP.precond import *
 from GNP.nn import ResGCN_AAA
 from GNP.utils import scale_A_by_spectral_radius, load_suitesparse, load_npzsparse, normalize_rows
@@ -163,7 +163,7 @@ def main():
     else:
         print('\nNo checkpoint is saved. Use model from the last epoch.')
         
-    solver = GMRES()
+    solver = GMRES_AAA()
     dataset = NPZDataset(args.location, "True")
     A, b, x = dataset[0]
     solver.solve(     # dry run; timing is not accurate
@@ -171,7 +171,7 @@ def main():
         timeout=timeout, rtol=rtol, progress_bar=False)
     # Solver
     
-    for test_num in [0, 10, 100, 1000]:
+    for test_num in [0, 10, 20, 30]:#100, 1000]:
         A, b, x = dataset[test_num]
         A = A.to(device)
         b = b.to(device)

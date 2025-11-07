@@ -57,6 +57,9 @@ class GNPNPZ():
             pbar = tqdm(total=epochs, desc='Train')
 
         for epoch in range(epochs):
+            epoch_loss_sum = 0
+            epoch_loss_min = np.inf
+            epoch_loss_max = 0
             for i in torch.randperm(len(self.dataset)):
                 A, b, x = self.dataset[i]
                 A = A.to(self.dtype).to(self.device)
@@ -67,15 +70,6 @@ class GNPNPZ():
                 b_out = (A @ x_out)
                 loss = F.l1_loss(b_out.squeeze(), b)
 
-                # Bookkeeping
-                hist_loss.append(loss.item())
-                if loss.item() < best_loss:
-                    best_loss = loss.item()
-                    best_epoch = epoch
-                    if checkpoint_prefix_with_path is not None:
-                        checkpoint_file = checkpoint_prefix_with_path + 'best.pt'
-                        torch.save(self.net.state_dict(), checkpoint_file)
-
                 # Train (cont.)
                 loss.backward()
                 if (epoch+1) % grad_accu_steps == 0 or epoch == epochs - 1:
@@ -83,10 +77,24 @@ class GNPNPZ():
                     optimizer.zero_grad()
                     if scheduler is not None:
                         scheduler.step()
+                epoch_loss_sum += loss.item()
+                if epoch_loss_min > loss.item():
+                    epoch_loss_min = loss.item()
+                if epoch_loss_max < loss.item():
+                    epoch_loss_max = loss.item()
+                
+            # Bookkeeping
+            hist_loss.append(epoch_loss_sum)
+            if epoch_loss_sum < best_loss:
+                best_loss = epoch_loss_sum
+                best_epoch = epoch
+                if checkpoint_prefix_with_path is not None:
+                    checkpoint_file = checkpoint_prefix_with_path + 'best.pt'
+                    torch.save(self.net.state_dict(), checkpoint_file)
 
             # Bookkeeping (cont.)
             if progress_bar:
-                pbar.set_description(f'Train loss {loss:.1e}')
+                pbar.set_description(f'Train epoch_loss_sum {epoch_loss_sum:.1e} min {epoch_loss_min:.1e} max {epoch_loss_max:.1e}')
                 pbar.update()
             if epoch == epochs - 1:
                 break
