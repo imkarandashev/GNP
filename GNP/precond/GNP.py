@@ -9,35 +9,6 @@ from tqdm import tqdm
 from GNP.solver import Arnoldi
 from GNP.utils import load_npzsparse, scale_A_by_spectral_radius
 
-class StreamingDataset_AAA(IterableDataset):
-    # A is torch tensor, either sparse or full
-    def __init__(self, A, batch_size, m):
-        super().__init__()
-        self.n = A.shape[0]
-        self.m = m
-        self.batch_size = batch_size
-
-        arnoldi = Arnoldi()
-        Vm1, barHm = arnoldi.build(A, m=m)
-        W, S, Zh = torch.linalg.svd(barHm, full_matrices=False)
-        Q = ( Vm1[:,:-1] @ Zh.T ) / S.view(1, m)
-        self.Q = Q.to('cpu')
-
-    def generate(self):
-        while True:
-            batch_size1 = self.batch_size // 2
-            e = torch.normal(0, 1, size=(self.m, batch_size1),
-                                dtype=torch.float64)
-            x = self.Q @ e
-            batch_size2 = self.batch_size - batch_size1
-            x2 = torch.normal(0, 1, size=(self.n, batch_size2),
-                                dtype=torch.float64)
-            x = torch.cat([x, x2], dim=1)
-            yield x
-            
-    def __iter__(self):
-        return iter(self.generate())
-
 class NPZDataset_AAA(Dataset):
     def __init__(self, path_to_matrix, has_solution, m, batch_size):
         super().__init__()
