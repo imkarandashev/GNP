@@ -71,7 +71,6 @@ def main():
     max_iters = 100             # maximum number of GMRES iterations
     timeout = None              # timeout in seconds
     rtol = 1e-8                 # relative residual tolerance in GMRES
-    training_data = 'A_b_x'     # type of training data x # 'x_mix'
     m = 40                      # Krylov subspace dimension for training data
     num_layers = 8              # number of layers in GNP
     embed = 16                  # embedding dimension in GNP
@@ -79,9 +78,9 @@ def main():
     drop_rate = 0.0             # dropout rate in GNP
     disable_scale_input = False # whether disable the scaling of inputs in GNP
     dtype = torch.float32       # training precision for GNP
-    batch_size = 1              # batch size in training GNP
+    batch_size = 16              # batch size in training GNP
     grad_accu_steps = 1         # gradient accumulation steps in training GNP
-    epochs = 20                 # number of epochs in training GNP
+    epochs = 1                 # number of epochs in training GNP
     lr = 1e-3                   # learning rate in training GNP
     weight_decay = 0.0          # weight decay in training GNP
     save_model = True           # whether save model
@@ -118,16 +117,16 @@ def main():
 
     # !!!!  TRAIN  !!!!
     # GMRES with GNP: Train preconditioner
-    print('\nTraining GNPNPZ ...')
+    print('\nTraining GNP_AAA ...')
     net = ResGCN_AAA(num_layers, embed, hidden, drop_rate,
                  scale_input=not disable_scale_input, dtype=dtype).to(device)
     optimizer = torch.optim.Adam(net.parameters(), lr=lr,
                                  weight_decay=weight_decay)
     scheduler = None
-    M = GNPNPZ(args.location, True, net, device)
+    M = GNP_AAA(args.location, True, net, device)
     tic = time.time()
     hist_loss, best_loss, best_epoch, model_file = M.train(
-        batch_size, grad_accu_steps, epochs, optimizer, scheduler,
+        m, batch_size, grad_accu_steps, epochs, optimizer, scheduler,
         num_workers=args.num_workers,
         checkpoint_prefix_with_path=\
         out_file_prefix_with_path if save_model else None,
@@ -164,8 +163,8 @@ def main():
         print('\nNo checkpoint is saved. Use model from the last epoch.')
         
     solver = GMRES_AAA()
-    dataset = NPZDataset(args.location, "True")
-    A, b, x = dataset[0]
+    dataset = NPZDataset_AAA(args.location, "True", m, batch_size)
+    _, A, b, x = dataset[0]
     solver.solve(     # dry run; timing is not accurate
         A, b, M=None, restart=restart, max_iters=max_iters,
         timeout=timeout, rtol=rtol, progress_bar=False)

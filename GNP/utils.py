@@ -69,44 +69,6 @@ def load_data_sample(path_to_matrix, matrix_id, has_solution):
         s_vec = s_vec[:n]
     return A, r_vec, s_vec
 
-# def load_dataset(path_to_matrix):
-#     data_list = []
-#     for v in list(map(int, map(lambda x: x.strip(".npz").strip("b_").strip("c_").strip("f_").strip("r_").strip("s_"), os.listdir(path_to_matrix)))):
-#         r_path = os.path.join(path_to_matrix, f"r_{v:06d}.npz")
-#         f_path = os.path.join(path_to_matrix, f"f_{v:06d}.npz")
-#         b_path = os.path.join(path_to_matrix, f"b_{v:06d}.npz")
-#         c_path = os.path.join(path_to_matrix, f"c_{v:06d}.npz")
-#         s_path = os.path.join(path_to_matrix, f"s_{v:06d}.npz")
-#         full_csr, full_rhs = load_system(f_path, c_path, b_path, r_path)
-        
-#         true_solution = np.load(s_path)["solution"] #solution obtained with from scipy.sparse.linalg.spsolve
-
-#         #check solution
-#         #y_res = full_csr.dot(true_solution)
-#         #print("check solution 1:", np.allclose(full_rhs, y_res))
-#         # нормируем данные
-#         normalized_matrix, rows_norms = normalize_rows(full_csr)
-#         full_rhs_normed = full_rhs / rows_norms
-
-#         # Преобразуем CSR матрицу в edge_index и edge_weight
-#         edge_index, edge_weight = from_scipy_sparse_matrix(normalized_matrix)
-#         #A_matrix = to_scipy_sparse_matrix(edge_index, edge_weight)
-#         #print("check matrix:", np.allclose(A_matrix.toarray(), full_csr.toarray()))
-
-#         # Создание объекта Data
-#         graph_data = Data(
-#             edge_index=edge_index,
-#             edge_attr=edge_weight.type(torch.float32),  # веса рёбер (опционально),
-#             rhs=torch.tensor(full_rhs_normed).type(torch.float32),
-#             true_x=torch.tensor(true_solution).type(torch.float32),
-#             num_nodes=full_csr.shape[0],
-#             rows_norms = rows_norms
-#         )
-#         data_list.append(graph_data)
-
-#     return data_list
-
-
 
 #-----------------------------------------------------------------------------
 # Load problem of npz sparse matrix.
@@ -149,8 +111,7 @@ def load_suitesparse(location, problem, device):
                                     dtype=torch.float64).to(device)
         return A
     
-    else:
-        
+    else:        
         raise Exception(f'Unsupported problem {problem}!')
 
     
