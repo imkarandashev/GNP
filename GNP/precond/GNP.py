@@ -9,14 +9,20 @@ from tqdm import tqdm
 from GNP.solver import Arnoldi
 from GNP.utils import load_npzsparse, scale_A_by_spectral_radius
 
+
 class NPZDataset_AAA(Dataset):
-    def __init__(self, path_to_matrix, has_solution, m, batch_size):
+    def __init__(self, path_to_matrix, has_solution, m, batch_size, count_samples=10, datalist=None):
         super().__init__()
-        self.datalist = list(map(int, map(lambda x: x.strip(".npz").strip("b_").strip("c_").strip("f_").strip("r_").strip("s_"), os.listdir(path_to_matrix))))
+        if datalist is None:
+            self.datalist = list(map(int, map(lambda x: x.strip(".npz").strip("b_").strip("c_").strip("f_").strip("r_").strip("s_"), os.listdir(path_to_matrix))))
+        else:
+            self.datalist = datalist
+        
         self.has_solution = has_solution
         self.path_to_matrix = path_to_matrix
         self.m = m
         self.batch_size = batch_size
+        self.count_samples = count_samples
         self.AAA = []
         self.bbb = []
         self.xxx = []
@@ -61,8 +67,8 @@ class NPZDataset_AAA(Dataset):
         b = b / gamma
         Q = self.get_arnoldi_decomp(A)
         #print(f"{Q.shape=}")
-        data = self.generate(Q, count=10)
-        return data, A, b, x
+        data = self.generate(Q, count=self.count_samples)
+        return data, self.datalist[idx], A, b, x
 
 #-----------------------------------------------------------------------------
 # Graph neural preconditioner with npz dataset
@@ -75,16 +81,15 @@ class GNP_AAA():
         self.path_to_matrix = path_to_matrix
         self.has_solution = has_solution
         
-    def train(self, m, batch_size, grad_accu_steps, epochs, optimizer,
+    def train(self, m, batch_size, epochs, optimizer,
               scheduler=None, num_workers=0, checkpoint_prefix_with_path=None,
-              progress_bar=True):
+              progress_bar=True, count_samples=10, datalist=None):
 
         self.net.train()
         optimizer.zero_grad()
 
-        self.dataset = NPZDataset_AAA(self.path_to_matrix, self.has_solution, m, batch_size)
-        #loader = DataLoader(self.dataset, batch_size, num_workers=num_workers, pin_memory=True, shuffle=True)
-        
+        self.dataset = NPZDataset_AAA(self.path_to_matrix, self.has_solution, m, batch_size, count_samples=count_samples, datalist=datalist)
+                
         hist_loss = []
         best_loss = np.inf
         best_epoch = -1
@@ -97,33 +102,33 @@ class GNP_AAA():
             epoch_loss_sum = 0
             epoch_loss_min = np.inf
             epoch_loss_max = 0
+            current_loss = 0
             for i in torch.randperm(len(self.dataset)):
-                data, A, b, x = self.dataset[i]
+                data, idx, A, b, x = self.dataset[i]
+                A = A.to(self.device).to(self.dtype)
                 for x_random in data:
-                    #print(f"{i=}, {x_random.shape=}")
-                    A = A.to(self.device).to(self.dtype)
-                    b_random = x_random.to(self.device).to(self.dtype)
-                    # Train
+                    x_random = x_random.to(self.device).to(self.dtype)
+                    b_random = (A @ x_random)#.to(torch.float64)).to(self.dtype)
                     x_out = self.net(A, b_random)
                     b_out = (A @ x_out)#.to(torch.float64)).to(self.dtype)
                     loss = F.l1_loss(b_out.squeeze(), b_random.squeeze())
-
+                    print(f"{idx=}, {x_random.shape=}, loss={loss.item()}")
                     # Train (cont.)
                     loss.backward()
-                    if (epoch+1) % grad_accu_steps == 0 or epoch == epochs - 1:
-                        optimizer.step()
-                        optimizer.zero_grad()
-                        if scheduler is not None:
-                            scheduler.step()
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    if scheduler is not None:
+                        scheduler.step()
                     epoch_loss_sum += loss.item()
+                    current_loss += loss.item()
                     if epoch_loss_min > loss.item():
                         epoch_loss_min = loss.item()
                     if epoch_loss_max < loss.item():
                         epoch_loss_max = loss.item()
-
+                hist_loss.append(current_loss / len(data))
+                current_loss = 0
                 
             # Bookkeeping
-            hist_loss.append(epoch_loss_sum)
             if epoch_loss_sum < best_loss:
                 best_loss = epoch_loss_sum
                 best_epoch = epoch
@@ -364,7 +369,6 @@ class GNP():
             x_out = self.net(b)
             b_out = (self.A @ x_out.to(torch.float64)).to(self.dtype)
             loss = F.l1_loss(b_out, b)
-
             # Bookkeeping
             hist_loss.append(loss.item())
             if loss.item() < best_loss:

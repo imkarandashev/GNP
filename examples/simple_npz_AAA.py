@@ -32,6 +32,10 @@ import matplotlib.pyplot as plt
 import sys
 sys.path.append(r"C:\Users\Iakov\jupyter\RUDN\Rosneft2025\GNP")
 
+import warnings
+# Suppress the specific UserWarning
+warnings.filterwarnings('ignore', message='.*Sparse CSC tensor support is in beta state.*')
+
 from GNP.problems import *
 from GNP.solver import GMRES_AAA
 from GNP.precond import *
@@ -54,6 +58,9 @@ def main():
         '--problem', type=str, default='VanVelzen/std1_Jac3',
         help='group/name from SuiteSparse '
         '(default: VanVelzen/std1_Jac3)')
+    parser.add_argument(
+        '--partition', type=str, default='0',
+        help='partition from big_data_partitions.json (default: 0)')
     parser.add_argument(
         '--out_path', type=str, default='./dump/',
         help='path of output figures (default: ./dump/)')
@@ -79,8 +86,9 @@ def main():
     disable_scale_input = False # whether disable the scaling of inputs in GNP
     dtype = torch.float32       # training precision for GNP
     batch_size = 16              # batch size in training GNP
+    count_samples = 75 
     grad_accu_steps = 1         # gradient accumulation steps in training GNP
-    epochs = 1                 # number of epochs in training GNP
+    epochs = 4                 # number of epochs in training GNP
     lr = 1e-3                   # learning rate in training GNP
     weight_decay = 0.0          # weight decay in training GNP
     save_model = True           # whether save model
@@ -123,14 +131,23 @@ def main():
     optimizer = torch.optim.Adam(net.parameters(), lr=lr,
                                  weight_decay=weight_decay)
     scheduler = None
+
+    import json
+    with open("big_data_partitions.json", "r") as fp:
+        partitions = json.load(fp)
+    P = args.partition
     M = GNP_AAA(args.location, True, net, device)
     tic = time.time()
     hist_loss, best_loss, best_epoch, model_file = M.train(
-        m, batch_size, grad_accu_steps, epochs, optimizer, scheduler,
+        m, batch_size, epochs, optimizer, scheduler,
         num_workers=args.num_workers,
         checkpoint_prefix_with_path=\
         out_file_prefix_with_path if save_model else None,
-        progress_bar=not hide_training_bar)
+        progress_bar=not hide_training_bar,
+        count_samples=count_samples,
+        datalist=partitions[P])
+        #datalist=[50,60])#partitions[P])
+
     print(f'Done. Training time: {time.time()-tic} seconds')
     print(f'Loss: inital = {hist_loss[0]}, '
           f'final = {hist_loss[-1]}, '
@@ -142,7 +159,7 @@ def main():
     print('\nPlotting training history ...')
     plt.figure(1)
     plt.semilogy(hist_loss, label='train')
-    plt.title(f'{args.problem}: Preconditioner convergence (MAE loss)')
+    plt.title(f'Preconditioner convergence (MAE loss)')
     plt.legend()
     # plt.show()
     full_path = out_file_prefix_with_path + 'training.png'
@@ -157,21 +174,23 @@ def main():
         print(f'\nLoading model from {model_file} ...')
         net.load_state_dict(torch.load(model_file, map_location=device))
         net = net.to(device)
-        M = GNPNPZ(args.location, False, net, device)
+        M = GNP_AAA(args.location, False, net, device)
         print('Done.')
     else:
         print('\nNo checkpoint is saved. Use model from the last epoch.')
         
     solver = GMRES_AAA()
-    dataset = NPZDataset_AAA(args.location, "True", m, batch_size)
-    _, A, b, x = dataset[0]
+    dataset = NPZDataset_AAA(args.location, "True", m, batch_size,
+                             datalist=partitions[P])
+                             #datalist=[70,80])#partitions[P])
+    _, _, A, b, x = dataset[0]
     solver.solve(     # dry run; timing is not accurate
         A, b, M=None, restart=restart, max_iters=max_iters,
         timeout=timeout, rtol=rtol, progress_bar=False)
     # Solver
     
-    for test_num in [0, 10, 20, 30]:#100, 1000]:
-        A, b, x = dataset[test_num]
+    for _, idx, A, b, x in dataset:
+        print(f"\nSolving {idx=}")
         A = A.to(device)
         b = b.to(device)
 
@@ -206,11 +225,11 @@ def main():
         if hist_rel_res_gnp is not None:
             plt.semilogy(hist_rel_res_gnp, color='C7', label='GNP')
         solver_name = solver.__class__.__name__
-        plt.title(f'test_{test_num}: {solver_name} convergence (relative residual)')
+        plt.title(f'test_{idx}: {solver_name} convergence (relative residual)')
         plt.xlabel('(Outer) Iterations')
         plt.legend()
         # plt.show()
-        full_path = out_file_prefix_with_path + f'test_{test_num}_solver.png'
+        full_path = out_file_prefix_with_path + f'test_{idx}_solver.png'
         plt.savefig(full_path)
         print(f'Figure saved in {full_path}')
         
@@ -221,14 +240,14 @@ def main():
         if hist_rel_res_gnp is not None:
             plt.semilogy(hist_time_gnp, hist_rel_res_gnp, color='C7', label='GNP')
         solver_name = solver.__class__.__name__
-        plt.title(f'test_{test_num}: {solver_name} convergence (relative residual)')
+        plt.title(f'test_{idx}: {solver_name} convergence (relative residual)')
         plt.xlabel('Time (seconds)')
         plt.legend()
         # plt.show()
-        full_path = out_file_prefix_with_path + f'test_{test_num}_time.png'
+        full_path = out_file_prefix_with_path + f'test_{idx}_time.png'
         plt.savefig(full_path)
         print(f'Figure saved in {full_path}')
-    
+        break
 
 #-----------------------------------------------------------------------------
 if __name__ == '__main__':
