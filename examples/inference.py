@@ -1,0 +1,177 @@
+import os
+import time
+import torch
+import argparse
+import warnings
+from pathlib import Path
+import matplotlib.pyplot as plt
+
+import sys
+sys.path.append(r"C:\Users\Iakov\jupyter\RUDN\Rosneft2025\GNP")
+
+import warnings
+# Suppress the specific UserWarning
+warnings.filterwarnings('ignore', message='.*Sparse CSC tensor support is in beta state.*')
+
+from GNP.problems import *
+from GNP.solver import GMRES_AAA
+from GNP.precond import *
+from GNP.nn import ResGCN_AAA
+from GNP.utils import scale_A_by_spectral_radius, load_suitesparse, load_npzsparse, normalize_rows
+
+#-----------------------------------------------------------------------------
+def main():
+
+    # Input arguments
+    parser = argparse.ArgumentParser(
+        description='Solving linear system Ax = b',
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        '--location', type=str, default='~/data/SuiteSparse/ssget/mat',
+        help='root path of SuiteSparse problem '
+        '(default: ~/data/SuiteSparse/ssget/mat)')
+    parser.add_argument(
+        '--problem', type=str, default='VanVelzen/std1_Jac3',
+        help='group/name from SuiteSparse '
+        '(default: VanVelzen/std1_Jac3)')
+    parser.add_argument(
+        '--partition', type=str, default='0',
+        help='partition from big_data_partitions.json (default: 0)')
+    parser.add_argument(
+        '--out_path', type=str, default='./dump/',
+        help='path of output figures (default: ./dump/)')
+    parser.add_argument(
+        '--model', type=str, default=None,
+        help='path of output figures (default: None)')
+    parser.add_argument(
+        '--out_file_prefix', type=str,
+        help='filename prefix of output figures. If argument is not set, '
+        '''default is f"{args.problem.replace('/', '_')}_"''')
+    parser.add_argument(
+        '--num_workers', type=int, default=0,
+        help='number of dataloader workers in training GNP (default: 0)')
+    args = parser.parse_args()
+
+    # Setup and parameters
+    restart = 10                # restart cycle in GMRES
+    max_iters = 100             # maximum number of GMRES iterations
+    timeout = None              # timeout in seconds
+    rtol = 1e-8                 # relative residual tolerance in GMRES
+    m = 40                      # Krylov subspace dimension for training data
+    num_layers = 8              # number of layers in GNP
+    embed = 16                  # embedding dimension in GNP
+    hidden = 32                 # hidden dimension in MLPs in GNP
+    drop_rate = 0.0             # dropout rate in GNP
+    disable_scale_input = False # whether disable the scaling of inputs in GNP
+    dtype = torch.float32       # training precision for GNP
+    batch_size = 16              # batch size in training GNP
+    count_samples = 75 
+    grad_accu_steps = 1         # gradient accumulation steps in training GNP
+    epochs = 4                 # number of epochs in training GNP
+    lr = 1e-3                   # learning rate in training GNP
+    weight_decay = 0.0          # weight decay in training GNP
+    save_model = True           # whether save model
+    hide_solver_bar = False     # whether hide progress bar in linear solver
+    hide_training_bar = False   # whether hide progress bar in GNP training
+
+    # Computing device
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
+
+    # Load problem
+    A, b, x = load_npzsparse(args.location, args.problem, device, has_solution=True)
+
+    # Normalize A to avoid hassles
+    A, gamma = scale_A_by_spectral_radius(A)
+    b = b / gamma
+    
+    # Print problem information
+    n = A.shape[0]
+    print(f'\nMatrix A: name = {args.problem}, n = {n}, nnz = {A._nnz()}')
+        
+    # Output path and filename
+    args.out_path = os.path.abspath(os.path.expanduser(args.out_path))
+    Path(args.out_path).mkdir(parents=True, exist_ok=True)
+    out_file_prefix_with_path = os.path.join(args.out_path, "")
+
+    #net = ResGCN_AAA(num_layers, embed, hidden, drop_rate,
+    #             scale_input=not disable_scale_input, dtype=dtype).to(device)
+    if args.model is not None:
+        print(f'\nLoading model from {args.model} ...')
+        #net.load_state_dict(torch.load(args.model))#, map_location=device)
+        net = torch.jit.load(args.model, map_location=device)
+        net = net.to(device)
+        print('Done.')
+    else:
+        print('\nargs.model is empty. Use model from the last epoch.')
+        exit()
+
+    M = GNP_AAA(args.location, False, net, device)   
+    solver = GMRES_AAA()
+    solver.solve(     # dry run; timing is not accurate
+        A, b, M=None, restart=restart, max_iters=max_iters,
+        timeout=timeout, rtol=rtol, progress_bar=False)
+    # Solver
+    print(f"\nSolving {args.problem}")
+    A = A.to(device)
+    b = b.to(device)
+
+    # GMRES without preconditioner
+    print('\nSolving linear system without preconditioner ...')
+    _, _, _, hist_rel_res, hist_time = solver.solve(
+        A, b, M=None, restart=restart, max_iters=max_iters,
+        timeout=timeout, rtol=rtol, progress_bar=not hide_solver_bar)
+    print(f'Done. Final relative residual = {hist_rel_res[-1]:.4e}')
+
+    # GMRES with GNP: Linear solve
+    print('\nSolving linear system with GNP ...')
+    warnings.filterwarnings('error')
+    try:
+        _, _, _, hist_rel_res_gnp, hist_time_gnp = solver.solve(
+            A, b, M=M, restart=restart, max_iters=max_iters,
+            timeout=timeout, rtol=rtol, progress_bar=not hide_solver_bar)
+    except UserWarning as w:
+        print('Warning:', w)
+        print('GMRES preconditioned by GNP fails')
+        hist_rel_res_gnp = None
+        hist_time_gnp = None
+    else:
+        print(f'Done. '
+            f'Final relative residual = {hist_rel_res_gnp[-1]:.4e}')
+    warnings.resetwarnings()
+
+    # Investigate solution history
+    print('\nPlotting solution history ...')
+    plt.figure(2)
+    plt.semilogy(hist_rel_res, color='C0', label='no precond')
+    if hist_rel_res_gnp is not None:
+        plt.semilogy(hist_rel_res_gnp, color='C7', label='GNP')
+    solver_name = solver.__class__.__name__
+    plt.title(f'test_{args.problem}: {solver_name} convergence (relative residual)')
+    plt.xlabel('(Outer) Iterations')
+    plt.legend()
+    # plt.show()
+    full_path = out_file_prefix_with_path + f'test_{args.problem}_solver.png'
+    plt.savefig(full_path)
+    print(f'Figure saved in {full_path}')
+    
+    # Compare solution speed
+    print('\nPlotting solution history (time to solution) ...')
+    plt.figure(3)
+    plt.semilogy(hist_time, hist_rel_res, color='C0', label='no precond')
+    if hist_rel_res_gnp is not None:
+        plt.semilogy(hist_time_gnp, hist_rel_res_gnp, color='C7', label='GNP')
+    solver_name = solver.__class__.__name__
+    plt.title(f'test_{args.problem}: {solver_name} convergence (relative residual)')
+    plt.xlabel('Time (seconds)')
+    plt.legend()
+    # plt.show()
+    full_path = out_file_prefix_with_path + f'test_{args.problem}_time.png'
+    plt.savefig(full_path)
+    print(f'Figure saved in {full_path}')
+
+#-----------------------------------------------------------------------------
+if __name__ == '__main__':
+    main()

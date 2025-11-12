@@ -74,10 +74,10 @@ class NPZDataset_AAA(Dataset):
 # Graph neural preconditioner with npz dataset
 class GNP_AAA():
     # A is torch tensor, either sparse or full
-    def __init__(self, path_to_matrix, has_solution, net, device):
+    def __init__(self, path_to_matrix, has_solution, net, device, dtype=torch.float32):
         self.net = net
         self.device = device
-        self.dtype = net.dtype
+        self.dtype = dtype
         self.path_to_matrix = path_to_matrix
         self.has_solution = has_solution
         
@@ -157,8 +157,8 @@ class GNP_AAA():
     @torch.no_grad()
     def apply(self, A, r): # r: float64
         self.net.eval()
-        A = A.to(self.dtype) # -> lower precision
-        r = r.to(self.dtype) # -> lower precision
+        A = A.type(self.dtype) # -> lower precision
+        r = r.type(self.dtype) # -> lower precision
         r = r.view(-1, 1)
         z = self.net(A, r)
         z = z.view(-1)

@@ -30,14 +30,16 @@ class MLP(nn.Module):
 
     def forward(self, R):                              # R: (*, in_dim)
         assert len(R.shape) >= 2
-        for i in range(self.num_layers):
-            R = self.lin[i](R)                            # (*, hidden)
+        for i, layer in enumerate(self.lin):
+            R = layer(R)
+        #for i in range(self.num_layers):
+        #    R = self.lin[i](R)                            # (*, hidden)
             if i != self.num_layers-1 or not self.is_output_layer:
-                if self.use_batchnorm:
-                    shape = R.shape
-                    R = R.view(-1, shape[-1])
-                    R = self.batchnorm[i](R)
-                    R = R.view(shape)
+                #if self.use_batchnorm:
+                #    shape = R.shape
+                #    R = R.view(-1, shape[-1])
+                #    R = self.batchnorm[i](R)
+                #    R = R.view(shape)
                 R = self.dropout(F.relu(R))
                                                           # (*, out_dim)
         return R
@@ -131,14 +133,16 @@ class ResGCN_AAA(nn.Module):
         if len(r.shape) == 1:
             r = r.view(len(r), 1) 
         n, batch_size = r.shape
-        if self.scale_input:
-            scaling = torch.linalg.vector_norm(r, dim=0) / np.sqrt(n)
-            r = r / scaling  # scaling
+        scaling = torch.linalg.vector_norm(r, dim=0) / n**0.5
+        #if self.scale_input:
+        r = r / scaling  # scaling
         r = r.view(n, batch_size, 1)                # (n, batch_size, 1)
         R = self.mlp_initial(r)                     # (n, batch_size, embed)
         
-        for i in range(self.num_layers):
-            R = self.gconv[i](AA, R) + self.skip[i](R)  # (n, batch_size, embed)
+        #for i in range(self.num_layers):
+        #    R = self.gconv[i](AA, R) + self.skip[i](R)  # (n, batch_size, embed)
+        for i, (gconv, skip) in enumerate(zip(self.gconv, self.skip)):
+            R = gconv(AA, R) + skip(R)  # (n, batch_size, embed)
             R = R.view(n * batch_size, self.embed)  # (n * batch_size, embed)
             # R = self.batchnorm[i](R)                # (n * batch_size, embed)
             R = R.view(n, batch_size, self.embed)   # (n, batch_size, embed)
@@ -146,8 +150,8 @@ class ResGCN_AAA(nn.Module):
             
         z = self.mlp_final(R)                       # (n, batch_size, 1)
         z = z.view(n, batch_size)                   # (n, batch_size)
-        if self.scale_input:
-            z = z * scaling  # scaling back
+        #if self.scale_input:
+        z = z * scaling  # scaling back
         return z
 
 
